@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>層架狀態記錄</title>
+  <script src="https://unpkg.com/html5-qrcode"></script>
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    h1, h2 { margin-top: 20px; }
+    button { 
+      margin: 5px; 
+      padding: 6px 12px; 
+      font-size: 1em; 
+      cursor: pointer; 
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      transition: all 0.3s ease;
+    }
+
+    #reader { width: 300px; margin-bottom: 10px; }
+
+    .record {
+      border-left: 6px solid #ccc;
+      border-bottom: 1px solid #ccc;
+      padding: 5px;
+      display: flex;
+      justify-content: space-between;
+      background-color: #f9f9f9;
+    }
+
+    .record[data-status="restock"] { border-left-color: orange; }
+    .record[data-status="move"]    { border-left-color: dodgerblue; }
+    .record[data-status="empty"]  { border-left-color: red; }
+
+    .highlight { background-color: #ffe680 !important; }
+    .options label[data-status="restock"] { color: orange; }
+    .options label[data-status="move"]     { color: dodgerblue; }
+    .options label[data-status="empty"]    { color: red; }
+
+    .left { flex: 1; }
+    .time { font-size: 0.9em; color: gray; }
+
+    #statusFilter { font-size: 1em; padding: 4px 8px; }
+    #statusStats { margin-top: 10px; font-size: 1em; }
+    
+    #soundBtn {
+      min-width: 120px;
+    }
+    #soundBtn.enabled {
+      background-color: #d4edda;
+      border-color: #c3e6cb;
+      color: #155724;
+    }
+    #soundBtn.disabled {
+      background-color: #f8d7da;
+      border-color: #f5c6cb;
+      color: #721c24;
+    }
+  </style>
+</head>
+<body>
+  <h1>📋 層架狀態記錄</h1>
+  <button id="soundBtn" class="disabled">🔇 音效關閉</button>
+  <button id="exportBtn">📤 匯出層架狀態</button>
+  <div id="reader"></div>
+
+  <h2>📷 層架掃描</h2>
+  <select id="statusFilter">
+    <option value="">全部</option>
+    <option value="restock">補貨</option>
+    <option value="move">移位</option>
+    <option value="empty">空位</option>
+  </select>
+
+  <div id="statusStats"></div>
+  <div id="resultList"></div>
+
+  <script>
+    const STORAGE_KEY = "qr-history"; // localStorage 中儲存記錄的鍵名
+    const SOUND_KEY = "sound-enabled"; // localStorage 中儲存音效狀態的鍵名
+    const resultList = document.getElementById("resultList"); // 顯示掃描結果的列表容器
+    const statusFilter = document.getElementById("statusFilter"); // 狀態篩選下拉選單
+    const statusStats = document.getElementById("statusStats"); // 狀態統計顯示區
+    const exportBtn = document.getElementById("exportBtn"); // 匯出按鈕
+    const soundBtn = document.getElementById("soundBtn"); // 音效開關按鈕
+
+    // Web Audio API 相關變數
+    let audioContext = null; // 音訊上下文，用於所有音訊操作
+    let gainNode = null;    // 增益節點，用於控制音量
+    let soundEnabled = false; // 音效是否啟用
+    let qrScanner = null; // Html5Qrcode 掃描器實例
+    let highlightedElement = null; // 當前被高亮的記錄元素
+    let lastScannedText = ""; // 上一次掃描到的文字
+    let lastScannedTime = 0; // 上一次掃描的時間戳
+
+    // 初始化音效 (使用 Web Audio API)
+    function initSound() {
+      // 從 localStorage 讀取音效設定，預設為關閉
+      soundEnabled = localStorage.getItem(SOUND_KEY) === "true";
+      updateSoundButton(); // 更新音效按鈕的顯示狀態
+
+      // 延遲初始化 AudioContext 直到用戶有交互，避免自動播放限制
+      // 監聽音效按鈕點擊事件，第一次點擊時設置 AudioContext
+      soundBtn.addEventListener("click", setupAudioContext, { once: true });
+      // 或者當首次成功掃描時也初始化 AudioContext，確保音效能被播放
+    }
+
+    // 設置 AudioContext：在用戶互動後才執行，確保瀏覽器允許播放音效
+    function setupAudioContext() {
+      if (!audioContext) { // 只有在 audioContext 尚未初始化時才建立
+        audioContext = new (window.AudioContext || window.webkitAudioContext)(); // 建立 AudioContext 實例
+        gainNode = audioContext.createGain(); // 建立增益節點
+        gainNode.connect(audioContext.destination); // 將增益節點連接到揚聲器（最終輸出）
+        gainNode.gain.value = 0.5; // 設置預設音量為 0.5 (範圍 0.0 到 1.0)
+        console.log("AudioContext 已初始化。");
+      }
+    }
+
+    // 更新音效按鈕的顯示狀態
+    function updateSoundButton() {
+      if (soundEnabled) {
+        soundBtn.textContent = '🔊 音效開啟'; // 顯示「音效開啟」
+        soundBtn.className = 'enabled'; // 應用 enabled 樣式
+      } else {
+        soundBtn.textContent = '🔇 音效關閉'; // 顯示「音效關閉」
+        soundBtn.className = 'disabled'; // 應用 disabled 樣式
+      }
+    }
+
+    // 播放嗶聲
+    function playBeep() {
+      // 如果音效已關閉或 AudioContext 尚未準備好，則不播放
+      if (!soundEnabled || !audioContext) {
+        console.log("音效已關閉或 AudioContext 尚未準備好。");
+        return;
+      }
+
+      try {
+        // 如果 AudioContext 處於暫停狀態，嘗試恢復它（例如，在用戶互動後）
+        if (audioContext.state === 'suspended') {
+          audioContext.resume().then(() => {
+            console.log("AudioContext 已恢復。");
+            createAndPlayBeep(); // 恢復成功後再播放嗶聲
+          }).catch(e => console.error("無法恢復 AudioContext:", e));
+        } else {
+          createAndPlayBeep(); // 直接播放嗶聲
+        }
+      } catch (e) {
+        console.error("播放嗶聲時發生錯誤:", e);
+      }
+    }
+
+    // 創建並播放單次嗶聲的實際邏輯
+    function createAndPlayBeep() {
+      if (!audioContext) return; // 再次檢查，以防萬一
+
+      const oscillator = audioContext.createOscillator(); // 建立振盪器節點，用於生成聲波
+      oscillator.type = 'sine'; // 設定波形為正弦波，聽起來會比較柔和
+      oscillator.frequency.setValueAtTime(880, audioContext.currentTime); // 設定頻率為 880 Hz
+
+      // 連接振盪器到增益節點，再連接到輸出
+      oscillator.connect(gainNode);
+
+      oscillator.start(); // 開始播放聲音
+      oscillator.stop(audioContext.currentTime + 0.1); // 在 0.1 秒後停止聲音，形成短促的嗶聲
+    }
+
+    // 音效按鈕點擊事件處理
+    soundBtn.addEventListener("click", function() {
+      soundEnabled = !soundEnabled; // 切換音效開關狀態
+      localStorage.setItem(SOUND_KEY, soundEnabled.toString()); // 儲存狀態到 localStorage
+      updateSoundButton(); // 更新按鈕顯示
+
+      // 如果音效開啟，則測試播放一次
+      if (soundEnabled) {
+        setupAudioContext(); // 確保 AudioContext 已初始化
+        playBeep();
+      }
+    });
+
+    // 匯出按鈕點擊事件，觸發匯出 CSV 功能
+    exportBtn.onclick = exportCSV;
+    // 狀態篩選器變更事件，觸發重新載入歷史記錄
+    statusFilter.onchange = loadHistory;
+
+    // 載入並顯示歷史掃描記錄
+    function loadHistory() {
+      const raw = localStorage.getItem(STORAGE_KEY); // 從 localStorage 獲取原始資料
+      const list = raw ? JSON.parse(raw) : []; // 解析 JSON 字串，如果為空則為空陣列
+      // 定義狀態的優先級，用於排序顯示（補貨 > 移位 > 空位 > 無狀態）
+      const priority = { restock: 3, move: 2, empty: 1, "": 0 };
+      list.sort((a, b) => {
+        const pa = priority[a.status] || 0;
+        const pb = priority[b.status] || 0;
+        if (pb !== pa) return pb - pa; // 優先級高的排在前面
+        return a.data.localeCompare(b.data); // 如果優先級相同，則掃描內容按字母順序排列
+      });
+
+      // 根據篩選條件過濾顯示的記錄
+      const filtered = statusFilter.value ? list.filter(i => i.status === statusFilter.value) : list;
+      resultList.innerHTML = filtered.map(item => `
+        <div class="record" data-time="${item.time}" data-status="${item.status}">
+          <div class="left">
+            <div>${item.data}</div>
+            <div class="time">${new Date(item.time).toLocaleString()}</div>
+          </div>
+          <div class="options">
+            <label><input type="radio" name="opt-${item.time}" value="delete" onchange="handleOptionChange('${item.time}','delete')">刪除</label>
+            <label data-status="restock"><input type="radio" name="opt-${item.time}" value="restock" ${item.status === 'restock' ? 'checked' : ''} onchange="handleOptionChange('${item.time}','restock')">補貨</label>
+            <label data-status="move"><input type="radio" name="opt-${item.time}" value="move" ${item.status === 'move' ? 'checked' : ''} onchange="handleOptionChange('${item.time}','move')">移位</label>
+            <label data-status="empty"><input type="radio" name="opt-${item.time}" value="empty" ${item.status === 'empty' ? 'checked' : ''} onchange="handleOptionChange('${item.time}','empty')">空位</label>
+          </div>
+        </div>
+      `).join("");
+
+      // 計算並顯示各狀態的統計數據
+      const stats = { restock: 0, move: 0, empty: 0 };
+      list.forEach(i => {
+        if (stats.hasOwnProperty(i.status)) {
+          stats[i.status]++;
+        }
+      });
+      statusStats.innerHTML = `
+        🟧 補貨：${stats.restock} 筆&nbsp;&nbsp;
+        🔵 移位：${stats.move} 筆&nbsp;&nbsp;
+        🔴 空位：${stats.empty} 筆&nbsp;&nbsp;
+        ⚪ 合計：${list.length} 筆
+      `;
+    }
+
+    // 新增掃描記錄
+    function addHistory(data) {
+      const time = new Date().toISOString(); // 記錄當前時間（ISO 格式）
+      const list = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); // 載入現有記錄
+
+      // 檢查是否已存在相同掃描內容的記錄
+      const existingItemIndex = list.findIndex(item => item.data === data);
+
+      if (existingItemIndex > -1) {
+        // 如果存在，將舊記錄從原位置移除
+        const existingItem = list.splice(existingItemIndex, 1)[0];
+        existingItem.time = time; // 更新時間
+        list.unshift(existingItem); // 將更新後的記錄移到最前面
+      } else {
+        // 如果不存在，則新增一筆新記錄到最前面，狀態預設為空
+        list.unshift({ data, time, status: "" });
+      }
+
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(list)); // 儲存回 localStorage
+      loadHistory(); // 重新載入並顯示記錄
+      highlightByTime(time); // 高亮顯示新記錄
+      playBeep(); // 播放音效
+    }
+
+    // 高亮顯示指定時間的記錄
+    function highlightByTime(time) {
+      // 移除之前高亮的元素
+      if (highlightedElement) {
+        highlightedElement.classList.remove("highlight");
+      }
+      // 延遲一小段時間再高亮，確保元素已在 DOM 中更新
+      setTimeout(() => {
+        const el = document.querySelector(`.record[data-time="${time}"]`); // 根據時間找到對應的記錄元素
+        if (el) {
+          el.classList.add("highlight"); // 添加高亮樣式
+          el.scrollIntoView({ behavior: "smooth", block: "center" }); // 捲動到可見區域
+          highlightedElement = el; // 記錄當前高亮的元素
+        }
+      }, 100);
+    }
+
+    // 處理記錄的選項變更（刪除、補貨、移位、空位）
+    function handleOptionChange(time, action) {
+      const list = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+      const idx = list.findIndex(i => i.time === time); // 找到對應記錄的索引
+      if (idx === -1) return; // 如果找不到，則直接返回
+
+      if (action === "delete") {
+        // 刪除前進行確認
+        if (!confirm(`確定要刪除 [${list[idx].data}] 這筆記錄嗎？`)) {
+          loadHistory(); // 如果取消，重新載入以恢復選項狀態
+          return;
+        }
+        list.splice(idx, 1); // 從列表中刪除該記錄
+      } else {
+        list[idx].status = action; // 更新記錄的狀態
+      }
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(list)); // 儲存回 localStorage
+      loadHistory(); // 重新載入顯示
+    }
+
+    // 匯出 CSV 檔案
+    function exportCSV() {
+      const list = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+      if (!list.length) return alert("沒有資料可匯出！"); // 如果沒有資料，則提示並返回
+      
+      const header = ["掃描內容", "時間", "狀態"]; // CSV 表頭
+      const csvRows = [header.join(",")]; // 將表頭轉換為 CSV 行
+
+      // 將狀態碼轉換為中文名稱
+      const statusName = s => {
+        if (s === 'restock') return "補貨";
+        if (s === 'move') return "移位";
+        if (s === 'empty') return "空位";
+        return ""; // 其他情況返回空字串
+      };
+
+      list.forEach(i => {
+        // 處理內容中的雙引號（用兩個雙引號表示一個雙引號），並加入狀態名稱
+        csvRows.push(`"${i.data.replace(/"/g,'""')}","${new Date(i.time).toLocaleString()}","${statusName(i.status)}"`);
+      });
+      
+      const BOM = '\uFEFF'; // UTF-8 BOM（位元組順序標記），確保 Excel 能正確開啟包含中文的 CSV
+      const blob = new Blob([BOM + csvRows.join("\r\n")], { type: "text/csv;charset=utf-8;" }); // 建立 Blob 物件
+      const url = URL.createObjectURL(blob); // 建立 Blob 的 URL
+      const a = document.createElement("a"); // 建立一個隱藏的 <a> 元素
+      a.href = url; // 設定下載連結
+      a.download = `層架記錄_${Date.now()}.csv`; // 設定下載檔名，包含時間戳
+      a.click(); // 模擬點擊下載
+      URL.revokeObjectURL(url); // 釋放 Blob URL 資源
+    }
+
+    // 啟動 QR 掃描器
+    function startScanner() {
+      // 如果掃描器已啟動則不重複啟動
+      if (qrScanner && qrScanner.isScanning) return; 
+      
+      qrScanner = new Html5Qrcode("reader"); // 實例化 Html5Qrcode，並指定渲染的 div ID
+      qrScanner.start(
+        { facingMode: "environment" }, // 使用後置鏡頭 ("user" 為前置鏡頭)
+        { fps: 10, qrbox: { width: 250, height: 250 } }, // 每秒幀數和掃描框大小
+        decodedText => { // 成功掃描到 QR code 時的回調函數
+          const now = Date.now();
+          // 增加一個短時間內的重複掃描過濾，避免過於頻繁的嗶聲和重複記錄
+          // 如果掃描內容與上次相同且時間間隔小於 3 秒，則忽略
+          if (decodedText === lastScannedText && now - lastScannedTime < 3000) return;
+          
+          lastScannedText = decodedText; // 更新上次掃描的文字
+          lastScannedTime = now; // 更新上次掃描的時間
+          
+          addHistory(decodedText); // 新增掃描記錄
+          setupAudioContext(); // 確保 AudioContext 在首次掃描成功時初始化
+        },
+        errorMessage => {} // 掃描錯誤時的回調函數（此處留空不處理錯誤訊息）
+      ).catch(err => { // 啟動掃描器失敗時的錯誤處理
+        console.error("無法啟動QR掃描器", err);
+        alert("無法啟動相機，請確認已授權瀏覽器使用相機的權限。");
+      });
+    }
+
+    // 頁面載入時的初始化動作
+    initSound();     // 初始化音效設定
+    loadHistory();   // 載入並顯示歷史記錄
+    startScanner();  // 啟動 QR 掃描器
+  </script>
+</body>
+</html>
