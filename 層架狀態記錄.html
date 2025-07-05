@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>層架狀態記錄</title>
+  <script src="https://unpkg.com/html5-qrcode"></script>
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    h1, h2 { margin-top: 20px; }
+    button { margin: 5px; padding: 6px 12px; font-size: 1em; cursor: pointer; }
+
+    #reader { width: 300px; margin-bottom: 10px; }
+
+    .record {
+      border-left: 6px solid #ccc;
+      border-bottom: 1px solid #ccc;
+      padding: 5px;
+      display: flex;
+      justify-content: space-between;
+      background-color: #f9f9f9;
+    }
+
+    .record[data-status="restock"] { border-left-color: orange; }
+    .record[data-status="move"]    { border-left-color: dodgerblue; }
+    .record[data-status="empty"]   { border-left-color: red; }
+
+    .highlight { background-color: #ffe680 !important; }
+    .options label[data-status="restock"] { color: orange; }
+    .options label[data-status="move"]    { color: dodgerblue; }
+    .options label[data-status="empty"]   { color: red; }
+
+    .left { flex: 1; }
+    .time { font-size: 0.9em; color: gray; }
+
+    #statusFilter { font-size: 1em; padding: 4px 8px; }
+    #statusStats { margin-top: 10px; font-size: 1em; }
+  </style>
+</head>
+<body>
+  <h1>📋 層架狀態記錄</h1>
+  <button id="enableSound">🔊 啟用提示音</button>
+  <button id="exportBtn">📤 匯出層架狀態</button>
+  <div id="reader"></div>
+
+  <h2>📷 層架掃描</h2>
+  <select id="statusFilter">
+    <option value="">全部</option>
+    <option value="restock">待補貨</option>
+    <option value="move">待移位</option>
+    <option value="empty">空位</option>
+  </select>
+
+  <div id="statusStats"></div>
+  <div id="resultList"></div>
+
+  <script>
+    const STORAGE_KEY = "qr-history";
+    const resultList = document.getElementById("resultList");
+    const statusFilter = document.getElementById("statusFilter");
+    const statusStats = document.getElementById("statusStats");
+    const exportBtn = document.getElementById("exportBtn");
+    const enableSoundBtn = document.getElementById("enableSound");
+    let beepSound = new Audio("beep.mp3");
+    let qrScanner = null;
+    let highlightedElement = null;
+    let lastScannedText = "";
+    let lastScannedTime = 0;
+
+    // 啟用聲音按鈕
+    enableSoundBtn.addEventListener("click", () => {
+      beepSound.play().then(() => {
+        beepSound.pause();
+        beepSound.currentTime = 0;
+        enableSoundBtn.style.display = "none";
+      }).catch(err => {
+        alert("瀏覽器不允許播放音效，請再點一次啟用提示音");
+      });
+    });
+
+    exportBtn.onclick = exportCSV;
+    statusFilter.onchange = loadHistory;
+
+    function loadHistory() {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      const list = raw ? JSON.parse(raw) : [];
+      const priority = { restock: 3, move: 2, empty: 1, "": 0 };
+      list.sort((a, b) => {
+        const pa = priority[a.status] || 0, pb = priority[b.status] || 0;
+        if (pb !== pa) return pb - pa;
+        return a.data.localeCompare(b.data);
+      });
+
+      const filtered = statusFilter.value ? list.filter(i => i.status === statusFilter.value) : list;
+      resultList.innerHTML = filtered.map(item => `
+        <div class="record" data-time="${item.time}" data-status="${item.status}">
+          <div class="left">
+            <div>${item.data}</div>
+            <div class="time">${new Date(item.time).toLocaleString()}</div>
+          </div>
+          <div class="options">
+            <label><input type="radio" name="opt-${item.time}" value="delete" onchange="handleOptionChange('${item.time}','delete')">刪除</label>
+            <label data-status="restock"><input type="radio" name="opt-${item.time}" value="restock" ${item.status === 'restock' ? 'checked' : ''} onchange="handleOptionChange('${item.time}','restock')">待補貨</label>
+            <label data-status="move"><input type="radio" name="opt-${item.time}" value="move" ${item.status === 'move' ? 'checked' : ''} onchange="handleOptionChange('${item.time}','move')">待移位</label>
+            <label data-status="empty"><input type="radio" name="opt-${item.time}" value="empty" ${item.status === 'empty' ? 'checked' : ''} onchange="handleOptionChange('${item.time}','empty')">空位</label>
+          </div>
+        </div>
+      `).join("");
+
+      const stats = { restock: 0, move: 0, empty: 0 };
+      list.forEach(i => stats[i.status] && stats[i.status]++);
+      statusStats.innerHTML = `
+        🟧 待補貨：${stats.restock} 筆　
+        🔵 待移位：${stats.move} 筆　
+        🔴 空位：${stats.empty} 筆　
+        ⚪ 合計：${list.length} 筆
+      `;
+    }
+
+    function addHistory(data) {
+      const time = new Date().toISOString();
+      const list = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+      list.push({ data, time, status: "" });
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+      loadHistory();
+
+      if (highlightedElement) highlightedElement.classList.remove("highlight");
+
+      setTimeout(() => {
+        const el = document.querySelector(`.record[data-time="${time}"]`);
+        if (el) {
+          el.classList.add("highlight");
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+          highlightedElement = el;
+        }
+      }, 100);
+    }
+
+    function handleOptionChange(time, action) {
+      const list = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+      const idx = list.findIndex(i => i.time === time);
+      if (idx === -1) return;
+
+      if (action === "delete") {
+        if (!confirm("確定要刪除？")) return;
+        list.splice(idx, 1);
+      } else {
+        list[idx].status = action;
+      }
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+      loadHistory();
+    }
+
+    function exportCSV() {
+      const list = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+      if (!list.length) return alert("沒有資料！");
+      const header = ["掃描內容", "時間", "狀態"];
+      const csvRows = [header.join(",")];
+      const statusName = s => s === 'restock' ? "待補貨" : s === 'move' ? "待移位" : s === 'empty' ? "空位" : "";
+
+      list.forEach(i => {
+        csvRows.push(`"${i.data.replace(/"/g,'""')}","${new Date(i.time).toLocaleString()}","${statusName(i.status)}"`);
+      });
+
+      const blob = new Blob([csvRows.join("\r\n")], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `層架記錄_${Date.now()}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function startScanner() {
+      if (qrScanner && qrScanner.isScanning) return;
+      qrScanner = new Html5Qrcode("reader");
+      qrScanner.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: 250 },
+        decoded => {
+          const now = Date.now();
+          if (decoded === lastScannedText && now - lastScannedTime < 3000) return;
+          lastScannedText = decoded;
+          lastScannedTime = now;
+          addHistory(decoded);
+          beepSound.play();
+        },
+        err => {}
+      ).catch(console.error);
+    }
+
+    // 初始化
+    loadHistory();
+    startScanner();
+  </script>
+</body>
+</html>
