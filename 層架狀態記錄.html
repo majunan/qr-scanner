@@ -39,7 +39,7 @@
 </head>
 <body>
   <h1>📋 層架狀態記錄</h1>
-  <button id="enableSound">🔊 Apple手機開啟提示音</button>
+  <button id="enableSound">🔊 開啟提示音</button>
   <button id="exportBtn">📤 匯出層架狀態</button>
   <div id="reader"></div>
 
@@ -156,7 +156,7 @@
       if (!list.length) return alert("沒有資料！");
       const header = ["掃描內容", "時間", "狀態"];
       const csvRows = [header.join(",")];
-      const statusName = s => s === 'restock' ? "待補貨" : s === 'move' ? "待移位" : s === 'empty' ? "空位" : "";
+      const statusName = s => s === 'restock' ? "補貨" : s === 'move' ? "移位" : s === 'empty' ? "空位" : "";
 
       list.forEach(i => {
         csvRows.push(`"${i.data.replace(/"/g,'""')}","${new Date(i.time).toLocaleString()}","${statusName(i.status)}"`);
