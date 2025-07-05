@@ -39,15 +39,15 @@
 </head>
 <body>
   <h1>📋 層架狀態記錄</h1>
-  <button id="enableSound">🔊 啟用提示音</button>
+  <button id="enableSound">🔊 Apple手機開啟提示音</button>
   <button id="exportBtn">📤 匯出層架狀態</button>
   <div id="reader"></div>
 
   <h2>📷 層架掃描</h2>
   <select id="statusFilter">
     <option value="">全部</option>
-    <option value="restock">待補貨</option>
-    <option value="move">待移位</option>
+    <option value="restock">補貨</option>
+    <option value="move">移位</option>
     <option value="empty">空位</option>
   </select>
 
@@ -110,8 +110,8 @@
       const stats = { restock: 0, move: 0, empty: 0 };
       list.forEach(i => stats[i.status] && stats[i.status]++);
       statusStats.innerHTML = `
-        🟧 待補貨：${stats.restock} 筆　
-        🔵 待移位：${stats.move} 筆　
+        🟧 補貨：${stats.restock} 筆　
+        🔵 移位：${stats.move} 筆　
         🔴 空位：${stats.empty} 筆　
         ⚪ 合計：${list.length} 筆
       `;
