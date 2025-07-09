@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>層架狀態記錄 (支援拍照與塗鴉)</title>
+  <script src="https://unpkg.com/@zxing/library@0.19.1"></script>
+  <style>
+    /* --- 通用樣式與響應式基礎 --- */
+    body {
+      font-family: sans-serif;
+      padding: 10px; /* 減少手機邊距 */
+      margin: 0 auto; /* 內容居中 */
+      max-width: 650px; /* 限制內容最大寬度，避免桌面版過寬 */
+      line-height: 1.6;
+      color: #333;
+    }
+
+    h1, h2 {
+      margin-top: 20px;
+      color: #2c3e50;
+    }
+
+    /* --- 觸控友善按鈕 --- */
+    button {
+      margin: 5px;
+      padding: 10px 15px; /* 增加內距，讓按鈕更大 */
+      font-size: 1.1em; /* 稍微放大字體 */
+      cursor: pointer;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      transition: background-color 0.2s, border-color 0.2s;
+      flex-shrink: 0; /* 防止按鈕在flex容器中縮小 */
+    }
+    button:hover:enabled {
+        background-color: #e9e9e9;
+    }
+    button:disabled {
+        background-color: #e0e0e0;
+        cursor: not-allowed;
+        color: #888;
+    }
+    select {
+      padding: 8px 10px; /* 增加下拉選單的內距 */
+      font-size: 1.1em;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      /* margin-right: 5px; /* 與統計數據的間距 - 由父元素gap控制 */ */
+    }
+
+    /* --- 掃描器與媒體響應式 --- */
+    #reader {
+      width: 100%; /* 掃描器寬度佔滿父容器 */
+      max-width: 350px; /* 限制最大寬度，避免過大 */
+      height: auto; /* 高度自動調整 */
+      margin: 20px auto; /* 上下邊距，左右居中 */
+      border: 2px solid #333;
+      display: block;
+      background-color: #000; /* 預防影片加載前是白色背景 */
+    }
+
+    /* --- 掃描記錄列表 --- */
+    .record {
+      /* border-left: 6px solid #ccc; /* 移除左側線條 */
+      border-bottom: 1px solid #eee; /* 輕微底部邊框 */
+      padding: 12px;
+      margin-bottom: 10px;
+      background-color: #fcfcfc; /* 輕微不同背景 */
+      border-radius: 4px; /* 圓角 */
+      display: flex;
+      flex-direction: column; /* 內容和選項垂直堆疊 */
+      gap: 5px; /* 內容塊之間的間距 */
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05); /* 輕微陰影 */
+    }
+    /* 移除基於狀態的左側線條顏色 */
+    .record[data-status="restock"] {
+      /* border-left-color: orange; */
+    }
+    .record[data-status="empty"] {
+      /* border-left-color: #b7f5b7; */
+    }
+    .record strong {
+      font-size: 1.15em; /* 掃描內容更大 */
+      word-break: break-all; /* 防止長文字溢出 */
+    }
+    .record .time {
+      font-size: 0.9em;
+      color: #666;
+    }
+    .options {
+      margin-top: 8px;
+      display: flex;
+      flex-wrap: wrap; /* 按鈕太多時自動換行 */
+      gap: 8px; /* 按鈕之間的間距 */
+      justify-content: flex-start; /* 按鈕從左側開始排列 */
+    }
+    .options button {
+      margin: 0; /* 移除額外的margin */
+      padding: 8px 12px; /* 調整選項按鈕大小 */
+      font-size: 0.95em;
+    }
+    .options button[style*="background:#ffa500"],
+    .options button[style*="background:#b7f5b7"] {
+        border-color: transparent; /* 選中狀態按鈕無邊框 */
+    }
+
+    /* --- 篩選器與統計資訊區塊 --- */
+    .filter-stats-container {
+        display: flex;
+        flex-wrap: wrap; /* 允許換行 */
+        align-items: center; /* 垂直居中對齊 */
+        gap: 10px; /* 元素間距 */
+        margin-bottom: 15px;
+        padding-bottom: 10px;
+        border-bottom: 1px solid #eee;
+    }
+    .filter-stats-container label {
+        /* margin-bottom: 5px; /* 標籤與選單的間距 - 由父元素gap控制 */ */
+        font-weight: bold;
+        color: #555;
+        font-size: 1.1em; /* 與選擇框字體大小相同 */
+    }
+    #statusStats {
+        font-size: 1.1em; /* 調整字體大小與篩選器相同 */
+        color: #444;
+        /* margin-top: 10px; /* 與篩選器的間距 - 由父元素gap控制 */ */
+        margin-left: 0; /* 移除舊的左邊距 */
+        white-space: nowrap; /* 防止統計數字換行 */
+    }
+
+    /* --- 桌面版媒體查詢 (Desktop Media Query) --- */
+    @media (min-width: 600px) {
+      .filter-stats-container {
+        flex-wrap: nowrap; /* 桌面版不換行 */
+        border-bottom: 3px double #ccc; /* 桌面版底部雙線 */
+      }
+      .filter-stats-container label {
+        margin-right: 10px; /* 標籤與選單的間距 */
+      }
+      #statusStats {
+        margin-left: auto; /* 推到右邊 */
+        margin-top: 0; /* 移除垂直間距 */
+        border-bottom: none; /* 移除個別統計的底部邊框 */
+      }
+      .options button {
+          padding: 6px 12px; /* 桌面版按鈕恢復原始大小 */
+          font-size: 1em;
+      }
+    }
+
+    /* --- 模態視窗樣式 --- */
+    .modal {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.9);
+      display: none;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 2000;
+      padding: 10px; /* 增加模態視窗內邊距 */
+      box-sizing: border-box; /* 確保padding不影響寬高計算 */
+    }
+    .modal-video-preview {
+      width: 90%; /* 讓影片預覽在手機上佔更寬 */
+      max-width: 500px; /* 限制最大寬度 */
+      height: auto; /* 自動調整高度 */
+      max-height: 70vh; /* 限制最大高度，保留下方控制按鈕空間 */
+      object-fit: cover;
+      background-color: #000;
+      border: 2px solid white; /* 邊框 */
+    }
+    .modal-controls {
+        margin-top: 20px;
+        display: flex;
+        gap: 15px; /* 按鈕間距 */
+    }
+    .modal-controls button {
+      padding: 12px 25px; /* 模態視窗按鈕更大 */
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 1.1em;
+    }
+    .btn-cancel { background: #f44336; }
+    .btn-capture { background: #4CAF50; }
+    .btn-save { background: #007bff; } /* Save button color */
+
+    /* Photo Display Modal (for doodling) */
+    #photoDisplayModal {
+        display: none;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        padding: 10px;
+    }
+    #doodleCanvas {
+        max-width: 95%; /* 畫布最大寬度 */
+        max-height: 75vh; /* 畫布最大高度，為控制項留空間 */
+        border: 2px solid white;
+        background-color: #000; /* 確保背景為黑色，避免透明時看到後面 */
+        touch-action: none; /* 防止觸控螢幕滾動 */
+    }
+    .doodle-controls {
+        margin-top: 10px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        justify-content: center;
+        align-items: center;
+    }
+    .doodle-controls input[type="color"] {
+        width: 40px;
+        height: 40px;
+        border: none;
+        padding: 0;
+        cursor: pointer;
+    }
+    .doodle-controls button {
+        padding: 8px 15px;
+        font-size: 1em;
+    }
+
+
+    /* Hidden Canvas for photo capture */
+    #photoCanvas { display: none; }
+
+    /* New style for the scanner header */
+    .scanner-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+  </style>
+</head>
+<body>
+  <h1>📋 層架狀態記錄</h1>
+  <button id="soundBtn">🔇 音效關閉</button>
+  <button id="exportBtn">📤 匯出資料</button>
+
+  <video id="reader"></video>
+
+  <div class="scanner-header">
+    <h2>📷 掃描記錄</h2>
+    <button id="toggleScannerBtn">關閉鏡頭</button>
+  </div>
+
+  <div class="filter-stats-container">
+    <label for="statusFilter">篩選狀態:</label>
+    <select id="statusFilter">
+      <option value="">全部狀態</option>
+      <option value="restock">補貨</option>
+      <option value="empty">空位</option>
+    </select>
+    <div id="statusStats"></div>
+  </div>
+
+  <div id="resultList"></div>
+
+  <div id="photoCaptureModal" class="modal">
+    <video id="photoCapturePreview" class="modal-video-preview" autoplay playsinline></video>
+    <canvas id="photoCanvas"></canvas>
+    <div class="modal-controls">
+        <button id="captureBtn" class="btn-capture" disabled>拍照</button>
+        <button id="photoCaptureCancel" class="btn-cancel">取消</button>
+    </div>
+  </div>
+
+  <div id="photoDisplayModal" class="modal">
+      <canvas id="doodleCanvas"></canvas>
+      <div class="doodle-controls">
+          <input type="color" id="doodleColor" value="#FF0000">
+          <button id="clearDoodleBtn">清除塗鴉</button>
+          <button id="saveDoodleBtn" class="btn-save">儲存塗鴉</button>
+          <button id="closeDoodleBtn" class="btn-cancel">關閉</button>
+      </div>
+  </div>
+
+  <script>
+    const STORAGE_KEY = "shelf-scan-history";
+    const SOUND_KEY = "sound-enabled";
+
+    // DOM Elements
+    const resultList = document.getElementById("resultList");
+    const statusFilter = document.getElementById("statusFilter");
+    const statusStats = document.getElementById("statusStats");
+    const exportBtn = document.getElementById("exportBtn");
+    const soundBtn = document.getElementById("soundBtn");
+    const toggleScannerBtn = document.getElementById("toggleScannerBtn"); // New button
+
+    // Photo Capture Modal Elements
+    const photoCaptureModal = document.getElementById("photoCaptureModal");
+    const photoCapturePreview = document.getElementById("photoCapturePreview");
+    const photoCanvas = document.getElementById("photoCanvas");
+    const captureBtn = document.getElementById("captureBtn");
+    const photoCaptureCancel = document.getElementById("photoCaptureCancel");
+
+    // Photo Display Modal Elements (for doodling)
+    const photoDisplayModal = document.getElementById("photoDisplayModal");
+    const doodleCanvas = document.getElementById("doodleCanvas");
+    const doodleCtx = doodleCanvas.getContext('2d');
+    const doodleColorInput = document.getElementById("doodleColor");
+    const clearDoodleBtn = document.getElementById("clearDoodleBtn");
+    const saveDoodleBtn = document.getElementById("saveDoodleBtn");
+    const closeDoodleBtn = document.getElementById("closeDoodleBtn"); // Changed from photoDisplayModal's onclick
+
+    let currentScanner = null;
+    let currentPhotoTargetTime = null; // Renamed for clarity: stores the time of the record being edited
+    let soundEnabled = false;
+    let lastScanTimeMap = {};
+    let photoStream = null;
+    let scannerActive = true;
+
+    // Doodling variables
+    let isDrawing = false;
+    let lastX = 0;
+    let lastY = 0;
+    let originalPhotoDataUrl = null; // To store the original photo before doodling
+
+    document.addEventListener('DOMContentLoaded', function() {
+      initSound();
+      loadHistory();
+      startMainScanner();
+      statusFilter.addEventListener('change', loadHistory);
+      exportBtn.addEventListener('click', exportCSV);
+      soundBtn.addEventListener('click', toggleSound);
+
+      // Event Listeners for modals
+      captureBtn.addEventListener('click', capturePhoto);
+      photoCaptureCancel.addEventListener('click', cancelPhotoCapture);
+      toggleScannerBtn.addEventListener('click', toggleScanner);
+
+      // Event Listeners for doodling
+      doodleCanvas.addEventListener('mousedown', startDrawing);
+      doodleCanvas.addEventListener('mousemove', draw);
+      doodleCanvas.addEventListener('mouseup', stopDrawing);
+      doodleCanvas.addEventListener('mouseout', stopDrawing); // Stop drawing if mouse leaves canvas
+
+      doodleCanvas.addEventListener('touchstart', startDrawing);
+      doodleCanvas.addEventListener('touchmove', draw);
+      doodleCanvas.addEventListener('touchend', stopDrawing);
+      doodleCanvas.addEventListener('touchcancel', stopDrawing);
+
+      clearDoodleBtn.addEventListener('click', clearDoodle);
+      saveDoodleBtn.addEventListener('click', saveDoodle);
+      closeDoodleBtn.addEventListener('click', closePhotoDisplay); // Use a dedicated close button
+    });
+
+    // Stop all media streams
+    function stopAllStreams() {
+        if (photoStream) {
+            photoStream.getTracks().forEach(track => track.stop());
+            photoStream = null;
+        }
+        if (currentScanner) {
+            currentScanner.reset();
+            currentScanner = null;
+        }
+    }
+
+    async function startMainScanner() {
+        stopAllStreams();
+        try {
+            currentScanner = new ZXing.BrowserMultiFormatReader();
+            await currentScanner.decodeFromVideoDevice(
+                undefined,
+                'reader',
+                (result, err) => {
+                    if (result) {
+                        const now = Date.now();
+                        const lastTime = lastScanTimeMap[result.text] || 0;
+                        if (now - lastTime >= 5000) {
+                            lastScanTimeMap[result.text] = now;
+                            addHistory(result.text);
+                        } else {
+                            console.log("主掃描：5秒內重複掃描，已略過", result.text);
+                        }
+                    }
+                    if (err && !(err instanceof ZXing.NotFoundException)) {
+                        console.error(err);
+                    }
+                }
+            );
+            scannerActive = true;
+            toggleScannerBtn.textContent = "關閉鏡頭";
+        } catch (err) {
+            console.error("掃描器初始化失敗:", err);
+            scannerActive = false;
+            toggleScannerBtn.textContent = "開啟鏡頭";
+        }
+    }
+
+    function stopMainScanner() {
+      stopAllStreams();
+      if (currentScanner) {
+        currentScanner.reset();
+        currentScanner = null;
+      }
+      scannerActive = false;
+      toggleScannerBtn.textContent = "開啟鏡頭";
+    }
+
+    function toggleScanner() {
+      if (scannerActive) {
+        stopMainScanner();
+      } else {
+        startMainScanner();
+      }
+    }
+
+    function addHistory(data) {
+        const list = getHistoryList();
+        const existingRecord = list.find(item => item.data === data);
+        const now = new Date().toISOString();
+        let recordToScrollId = '';
+
+        if (existingRecord) {
+            existingRecord.time = now;
+            recordToScrollId = `record-${existingRecord.time}`;
+        } else {
+            const newRecord = {
+                data: data,
+                time: now,
+                status: "",
+                photo: null
+            };
+            list.unshift(newRecord);
+            recordToScrollId = `record-${newRecord.time}`;
+        }
+        saveHistoryList(list);
+        loadHistory();
+        playBeep();
+
+        setTimeout(() => {
+            const element = document.getElementById(recordToScrollId);
+            if (element) {
+                element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        }, 100);
+    }
+
+    async function startPhotoCapture(time) {
+        currentPhotoTargetTime = time; // Store the time of the record
+        stopAllStreams();
+        photoCaptureModal.style.display = 'flex';
+        try {
+            photoStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+            photoCapturePreview.srcObject = photoStream;
+
+            photoCapturePreview.onloadedmetadata = () => {
+                photoCapturePreview.play().catch(err => console.error("影片播放失敗:", err));
+                captureBtn.disabled = false;
+            };
+
+        } catch (err) {
+            console.error("無法啟動相機:", err);
+            alert("無法啟動相機，請檢查權限或裝置。\n錯誤訊息: " + err.message);
+            cancelPhotoCapture();
+        }
+    }
+
+    function capturePhoto() {
+        const context = photoCanvas.getContext('2d');
+        photoCanvas.width = photoCapturePreview.videoWidth;
+        photoCanvas.height = photoCapturePreview.videoHeight;
+        context.drawImage(photoCapturePreview, 0, 0, photoCanvas.width, photoCanvas.height);
+
+        const dataUrl = photoCanvas.toDataURL('image/jpeg', 0.8);
+        const list = getHistoryList();
+        const record = list.find(item => item.time === currentPhotoTargetTime);
+
+        if (record) {
+            record.photo = dataUrl;
+            saveHistoryList(list);
+            playBeep();
+        }
+
+        photoCaptureModal.style.display = 'none';
+        stopAllStreams();
+        startMainScanner();
+        showPhoto(currentPhotoTargetTime); // Show the photo immediately after capture
+    }
+
+    function cancelPhotoCapture() {
+        photoCaptureModal.style.display = 'none';
+        currentPhotoTargetTime = null;
+        captureBtn.disabled = true;
+        if (photoStream) {
+            photoStream.getTracks().forEach(track => track.stop());
+            photoStream = null;
+        }
+        photoCapturePreview.srcObject = null;
+        startMainScanner();
+        loadHistory();
+        setTimeout(() => {
+            if (resultList.firstElementChild) {
+                resultList.firstElementChild.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        }, 100);
+    }
+
+    // --- Doodling Functions ---
+    function showPhoto(time) {
+        const list = getHistoryList();
+        const record = list.find(item => item.time === time);
+        if (record && record.photo) {
+            originalPhotoDataUrl = record.photo; // Save original for clear doodle
+            const img = new Image();
+            img.onload = () => {
+                // Adjust canvas size to fit image while maintaining aspect ratio
+                const maxWidth = window.innerWidth * 0.95;
+                const maxHeight = window.innerHeight * 0.75; // Leave space for controls
+
+                let width = img.width;
+                let height = img.height;
+
+                if (width > maxWidth) {
+                    height = height * (maxWidth / width);
+                    width = maxWidth;
+                }
+                if (height > maxHeight) {
+                    width = width * (maxHeight / height);
+                    height = maxHeight;
+                }
+
+                doodleCanvas.width = width;
+                doodleCanvas.height = height;
+
+                doodleCtx.clearRect(0, 0, doodleCanvas.width, doodleCanvas.height); // Clear previous drawings
+                doodleCtx.drawImage(img, 0, 0, doodleCanvas.width, doodleCanvas.height); // Draw the image
+            };
+            img.src = record.photo;
+            photoDisplayModal.style.display = 'flex';
+            currentPhotoTargetTime = time; // Set target for saving doodles
+        } else {
+            alert("找不到照片!");
+        }
+    }
+
+    function getMousePos(canvas, evt) {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        return {
+            x: (evt.clientX - rect.left) * scaleX,
+            y: (evt.clientY - rect.top) * scaleY
+        };
+    }
+
+    function getTouchPos(canvas, evt) {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const touch = evt.touches[0];
+        return {
+            x: (touch.clientX - rect.left) * scaleX,
+            y: (touch.clientY - rect.top) * scaleY
+        };
+    }
+
+    function startDrawing(e) {
+        e.preventDefault(); // Prevent scrolling on touch devices
+        isDrawing = true;
+        const pos = e.type.includes('mouse') ? getMousePos(doodleCanvas, e) : getTouchPos(doodleCanvas, e);
+        [lastX, lastY] = [pos.x, pos.y];
+        doodleCtx.beginPath();
+        doodleCtx.moveTo(lastX, lastY);
+    }
+
+    function draw(e) {
+        if (!isDrawing) return;
+        e.preventDefault(); // Prevent scrolling on touch devices
+        const pos = e.type.includes('mouse') ? getMousePos(doodleCanvas, e) : getTouchPos(doodleCanvas, e);
+
+        doodleCtx.lineWidth = 5; // Adjust line width as needed
+        doodleCtx.lineCap = 'round';
+        doodleCtx.strokeStyle = doodleColorInput.value;
+
+        doodleCtx.lineTo(pos.x, pos.y);
+        doodleCtx.stroke();
+        [lastX, lastY] = [pos.x, pos.y];
+    }
+
+    function stopDrawing() {
+        isDrawing = false;
+        doodleCtx.closePath();
+    }
+
+    function clearDoodle() {
+        if (originalPhotoDataUrl) {
+            const img = new Image();
+            img.onload = () => {
+                doodleCtx.clearRect(0, 0, doodleCanvas.width, doodleCanvas.height);
+                doodleCtx.drawImage(img, 0, 0, doodleCanvas.width, doodleCanvas.height);
+            };
+            img.src = originalPhotoDataUrl;
+        } else {
+            doodleCtx.clearRect(0, 0, doodleCanvas.width, doodleCanvas.height);
+        }
+    }
+
+    function saveDoodle() {
+        const dataUrl = doodleCanvas.toDataURL('image/jpeg', 0.8);
+        const list = getHistoryList();
+        const record = list.find(item => item.time === currentPhotoTargetTime);
+
+        if (record) {
+            record.photo = dataUrl; // Overwrite with doodled image
+            saveHistoryList(list);
+            alert("塗鴉已儲存！");
+            playBeep(); // Play beep on successful save
+            closePhotoDisplay(); // Close after saving
+        }
+    }
+
+    function closePhotoDisplay() {
+        photoDisplayModal.style.display = 'none';
+        doodleCtx.clearRect(0, 0, doodleCanvas.width, doodleCanvas.height); // Clear canvas
+        originalPhotoDataUrl = null; // Clear original photo reference
+        currentPhotoTargetTime = null; // Clear target time
+        loadHistory();
+        setTimeout(() => {
+            if (resultList.firstElementChild) {
+                resultList.firstElementChild.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        }, 100);
+    }
+    // --- End Doodling Functions ---
+
+
+    function handleStatusChange(time, status) {
+        const list = getHistoryList();
+        const recordIndex = list.findIndex(item => item.time === time);
+        if (recordIndex !== -1) {
+            if (status === "delete") {
+                if (confirm(`確定刪除記錄: ${list[recordIndex].data}？`)) {
+                    list.splice(recordIndex, 1);
+                }
+            } else {
+                list[recordIndex].status = status;
+            }
+            saveHistoryList(list);
+            loadHistory();
+        }
+    }
+
+    function loadHistory() {
+        const list = getHistoryList();
+        const filter = statusFilter.value;
+        const filtered = filter ? list.filter(item => item.status === filter) : list;
+
+        const stats = {
+            restock: list.filter(item => item.status === "restock").length,
+            empty: list.filter(item => item.status === "empty").length,
+        };
+
+        statusStats.innerHTML = `
+            補貨: ${stats.restock} |
+            空位: ${stats.empty}
+        `;
+
+        resultList.innerHTML = filtered.map(item => `
+            <div class="record" id="record-${item.time}" data-time="${item.time}" data-status="${item.status}">
+                <div>
+                    <strong>${item.data}</strong>
+                    <div class="time">${formatTime(item.time)}</div>
+                </div>
+                <div class="options">
+                    <button onclick="handleStatusChange('${item.time}', 'restock')"
+                        ${item.status === 'restock' ? 'style="background:#ffa500;color:white"' : ''}>
+                        補貨
+                    </button>
+                    <button onclick="handleStatusChange('${item.time}', 'empty')"
+                        ${item.status === 'empty' ? 'style="background:#b7f5b7;color:black"' : ''}>
+                        空位
+                    </button>
+                    <button onclick="startPhotoCapture('${item.time}')">拍照</button>
+                    ${item.photo ? `<button onclick="showPhoto('${item.time}')" style="color:blue;">照片</button>` : ''}
+                    <button onclick="handleStatusChange('${item.time}', 'delete')" style="color:red">刪除</button>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    function initSound() {
+        soundEnabled = localStorage.getItem(SOUND_KEY) === "true";
+        updateSoundButton();
+    }
+
+    function toggleSound() {
+        soundEnabled = !soundEnabled;
+        localStorage.setItem(SOUND_KEY, soundEnabled);
+        updateSoundButton();
+        if (soundEnabled) playBeep();
+    }
+
+    function updateSoundButton() {
+        soundBtn.textContent = soundEnabled ? "🔊 音效開啟" : "🔇 音效關閉";
+        soundBtn.style.backgroundColor = soundEnabled ? "#d4edda" : "#f8d7da";
+    }
+
+    function playBeep() {
+        if (!soundEnabled) return;
+        try {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const osc = ctx.createOscillator();
+            osc.type = "sine";
+            osc.frequency.value = 880;
+            osc.connect(ctx.destination);
+            osc.start();
+            osc.stop(ctx.currentTime + 0.1);
+        } catch (err) {
+            console.error("音效播放失敗:", err);
+        }
+    }
+
+    function exportCSV() {
+        const list = getHistoryList();
+        if (list.length === 0) return alert("沒有可導出的數據");
+
+        const headers = ["內容", "時間", "狀態", "是否有照片"];
+
+        const rows = list.map(item => [
+            `"${item.data.replace(/"/g, '""')}"`,
+            `"${formatTime(item.time)}"`,
+            `"${getStatusText(item.status)}"`,
+            `"${item.photo ? 'Y' : 'N'}"`
+        ]);
+
+        const csvContent = [
+            headers.join(","),
+            ...rows.map(row => row.join(","))
+        ].join("\r\n");
+
+        const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `層架記錄_${new Date().toISOString().slice(0, 10)}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    function getHistoryList() {
+        const data = localStorage.getItem(STORAGE_KEY);
+        return data ? JSON.parse(data) : [];
+    }
+
+    function saveHistoryList(list) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+    }
+
+    function formatTime(isoString) {
+        const date = new Date(isoString);
+        // 顯示為 "YYYY/MM/DD HH:MM"
+        const year = date.getFullYear();
+        const month = (date.getMonth() + 1).toString().padStart(2, '0');
+        const day = date.getDate().toString().padStart(2, '0');
+        const hours = date.getHours().toString().padStart(2, '0');
+        const minutes = date.getMinutes().toString().padStart(2, '0');
+        return `${year}/${month}/${day} ${hours}:${minutes}`;
+    }
+
+    function getStatusText(status) {
+        const map = {
+            restock: "補貨",
+            empty: "空位"
+        };
+        return map[status] || "";
+    }
+
+    // Make functions globally accessible for inline event handlers
+    window.handleStatusChange = handleStatusChange;
+    window.startPhotoCapture = startPhotoCapture;
+    window.showPhoto = showPhoto;
+    // window.closePhotoDisplay = closePhotoDisplay; // Now handled by closeDoodleBtn
+  </script>
+</body>
+</html>
