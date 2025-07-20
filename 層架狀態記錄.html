@@ -1,0 +1,1240 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>層架狀態記錄 (支援拍照、塗鴉與備註)</title>
+  <script src="https://unpkg.com/@zxing/library@0.19.1"></script>
+  <style>
+    /* --- 通用樣式與響應式基礎 --- */
+    body {
+      font-family: sans-serif;
+      padding: 10px;
+      margin: 0 auto;
+      max-width: 650px;
+      line-height: 1.6;
+      color: #333;
+    }
+
+    h1, h2 {
+      margin-top: 20px;
+      color: #2c3e50;
+    }
+
+    button {
+      margin: 5px;
+      padding: 10px 15px;
+      font-size: 1.1em;
+      cursor: pointer;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      transition: background-color 0.2s, border-color 0.2s;
+      flex-shrink: 0;
+    }
+    button:hover:enabled {
+        background-color: #e9e9e9;
+    }
+    button:disabled {
+        background-color: #e0e0e0;
+        cursor: not-allowed;
+        color: #888;
+    }
+    
+    button[onclick^="startPhotoCapture"] {
+      border: 2px solid #007bff !important;
+    }
+    
+    select {
+      padding: 8px 10px;
+      font-size: 1.1em;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+
+    #reader {
+      width: 9.2cm;
+         height: 6.9cm;
+         object-fit: cover;  /* 強制填滿，可能裁剪 */
+         overflow: hidden;   /* 隱藏超出部分 */
+    }
+
+    .record {
+      border-bottom: 1px solid #eee;
+      padding: 8px 12px;
+      margin-bottom: 5px;
+      background-color: #fcfcfc;
+      border-radius: 4px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+
+    .content-and-time {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .record strong {
+      font-size: 1.15em;
+      word-break: break-all;
+      flex-grow: 1;
+      min-width: 0;
+    }
+    .record .time {
+      font-size: 0.85em;
+      color: #777;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .options {
+      margin-top: 8px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-start;
+    }
+    .options button {
+      margin: 0;
+      padding: 8px 12px;
+      font-size: 0.95em;
+    }
+    .options button[style*="background:#ffa500"],
+    .options button[style*="background:#b7f5b7"] {
+        border-color: transparent;
+    }
+
+    .remark-section {
+        margin-top: 15px;
+        width: 90%;
+        max-width: 500px;
+        color: white;
+    }
+    .remark-section label {
+        font-size: 0.9em;
+        color: #ddd;
+        display: block;
+        margin-bottom: 3px;
+    }
+    .remark-input-container {
+        display: flex;
+        align-items: flex-end;
+        gap: 5px;
+    }
+    .remark-section textarea {
+        flex-grow: 1;
+        padding: 8px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        font-size: 0.95em;
+        resize: none;
+        min-height: 35px;
+        max-height: none !important;
+        box-sizing: border-box;
+        background-color: #333;
+        color: white;
+        overflow-y: hidden !important;
+        min-width: 0;
+        height: auto;
+        line-height: 1.2;
+    }
+    #clearRemarkBtn {
+        padding: 8px 10px;
+        font-size: 0.85em;
+        background-color: #ff5722;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        align-self: flex-end;
+        height: 35px;
+        margin: 0;
+    }
+    #clearRemarkBtn:hover {
+        background-color: #e64a19;
+    }
+
+    #remarkCharCount {
+        font-size: 0.8em;
+        color: #aaa;
+        text-align: right;
+        width: 100%;
+        margin-top: 2px;
+    }
+
+    .filter-stats-container {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 15px;
+        padding-bottom: 10px;
+        border-bottom: 1px solid #eee;
+    }
+    .filter-stats-container label {
+        font-weight: bold;
+        color: #555;
+        font-size: 1.1em;
+    }
+    #statusStats {
+        font-size: 1.1em;
+        color: #444;
+        margin-left: 0;
+        white-space: nowrap;
+    }
+
+    @media (min-width: 600px) {
+      .filter-stats-container {
+        flex-wrap: nowrap;
+        border-bottom: 3px double #ccc;
+      }
+      .filter-stats-container label {
+        margin-right: 10px;
+      }
+      #statusStats {
+        margin-left: auto;
+        margin-top: 0;
+        border-bottom: none;
+      }
+      .options button {
+          padding: 6px 12px;
+          font-size: 1em;
+      }
+    }
+
+    .modal {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.9);
+      display: none;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      z-index: 2000;
+      padding: 10px;
+      box-sizing: border-box;
+      overflow-y: auto;
+    }
+    .modal-video-preview {
+      width: 90%;
+      max-width: 500px;
+      height: auto;
+      max-height: 70vh;
+      object-fit: cover;
+      background-color: #000;
+      border: 2px solid white;
+    }
+    .modal-controls {
+        margin-top: 20px;
+        display: flex;
+        gap: 15px;
+        flex-wrap: wrap;
+        justify-content: center;
+    }
+    .modal-controls button {
+      padding: 12px 25px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 1.1em;
+    }
+    .btn-cancel {
+        background: #f44336;
+        color: white;
+    }
+    .modal-controls .btn-capture {
+        background: #4CAF50;
+        color: white;
+        border: 2px solid yellow;
+    }
+    .btn-save {
+        background: #007bff;
+        color: white;
+    }
+
+    .flashlight-btn {
+        background-color: #333;
+        color: white;
+        border: 2px solid #ffcc00;
+    }
+    .flashlight-btn.active {
+        background-color: #ffcc00;
+        color: black;
+        font-weight: bold;
+    }
+
+    #photoDisplayModal {
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        padding: 10px;
+    }
+    #doodleCanvas {
+        max-width: 95%;
+        max-height: 60vh;
+        border: 2px solid white;
+        background-color: #000;
+        touch-action: none;
+    }
+    .doodle-controls {
+        margin-top: 10px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        justify-content: center;
+        align-items: center;
+    }
+    .doodle-controls input[type="color"] {
+        width: 40px;
+        height: 40px;
+        border: none;
+        padding: 0;
+        cursor: pointer;
+    }
+    .doodle-controls button {
+        padding: 8px 12px;
+        font-size: 0.95em;
+    }
+
+    #photoCanvas { display: none; }
+
+    .scanner-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    
+    .scanner-controls {
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    /* 掃描引導框 - 初始狀態隱藏 */
+    #scanGuide {
+      position: absolute;
+      top: calc(50% - 0.3cm);
+      left: calc(50% + 0.1cm);
+      transform: translate(-50%, -50%);
+      width: 70%;
+      height: 200px;
+      border: 3px solid #4CAF50;
+      pointer-events: none;
+      display: none; /* 初始隱藏 */
+      justify-content: center;
+      align-items: center;
+      z-index: 10;
+    }
+    #scanGuide div {
+      color: white;
+      font-size: 1.2em;
+      text-align: center;
+    }
+    #scanGuide div div {
+      margin-top: 10px;
+      font-size: 0.8em;
+    }
+
+    /* 自定義刪除確認對話框樣式 */
+    .delete-confirm-modal {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0,0,0,0.7);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      z-index: 3000;
+    }
+    .delete-confirm-content {
+      background: white;
+      padding: 20px;
+      border-radius: 5px;
+      max-width: 80%;
+      text-align: center;
+    }
+    .delete-confirm-buttons {
+      margin-top: 15px;
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+    }
+    .delete-confirm-btn {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 1em;
+    }
+    .delete-confirm-btn.confirm {
+      background: #f44336;
+      color: white;
+    }
+    .delete-confirm-btn.cancel {
+      background: #ccc;
+    }
+  </style>
+</head>
+<body>
+  <h1>📋 層架狀態記錄</h1>
+  <button id="soundBtn">🔇 音效關閉</button>
+  <button id="exportBtn">📤 匯出資料</button>
+
+  <video id="reader"></video>
+  <div id="scanGuide">
+    <div>
+      將 QR 碼對準此框內
+      <div>保持穩定，光線充足</div>
+    </div>
+  </div>
+  
+  <div class="scanner-controls">
+    <!-- 手電筒按鈕已移除 -->
+  </div>
+
+  <div class="scanner-header">
+    <h2>📷 掃描記錄</h2>
+    <button id="toggleScannerBtn">關閉鏡頭</button>
+  </div>
+
+  <div class="filter-stats-container">
+    <label for="statusFilter">篩選狀態:</label>
+    <select id="statusFilter">
+      <option value="">全部狀態</option>
+      <option value="restock">補貨</option>
+      <option value="empty">空位</option>
+    </select>
+    <div id="statusStats"></div>
+  </div>
+
+  <div id="resultList"></div>
+
+  <div id="photoCaptureModal" class="modal">
+    <video id="photoCapturePreview" class="modal-video-preview" autoplay playsinline></video>
+    <canvas id="photoCanvas"></canvas>
+    <div class="modal-controls">
+        <button id="captureBtn" class="btn-capture" disabled>拍照</button>
+        <button id="photoCaptureFlashBtn" class="flashlight-btn">🔦 開啟閃光燈</button>
+        <button id="photoCaptureCancel" class="btn-cancel">取消</button>
+    </div>
+  </div>
+
+  <div id="photoDisplayModal" class="modal">
+      <canvas id="doodleCanvas"></canvas>
+      <div class="doodle-controls">
+          <input type="color" id="doodleColor" value="#FF0000">
+          <button id="clearDoodleBtn">清除塗鴉</button>
+          <button id="closeDoodleBtn" class="btn-cancel">關閉</button>
+      </div>
+      <div class="remark-section">
+          <label for="modalRemarkTextarea">備註:</label>
+          <div class="remark-input-container">
+              <textarea id="modalRemarkTextarea"></textarea>
+              <button id="clearRemarkBtn">清除</button>
+          </div>
+          <span id="remarkCharCount"></span>
+      </div>
+  </div>
+
+  <script>
+    // ===== 常數定義 =====
+    const STORAGE_KEY = "shelf-scan-history";
+    const SOUND_KEY = "sound-enabled";
+    const REMARK_MAX_LENGTH = 120;
+    const REMARK_MIN_HEIGHT = '35px';
+
+    // ===== DOM 元素 =====
+    const resultList = document.getElementById("resultList");
+    const statusFilter = document.getElementById("statusFilter");
+    const statusStats = document.getElementById("statusStats");
+    const exportBtn = document.getElementById("exportBtn");
+    const soundBtn = document.getElementById("soundBtn");
+    const toggleScannerBtn = document.getElementById("toggleScannerBtn");
+    const scanGuide = document.getElementById("scanGuide");
+
+    // 拍照模態視窗元素
+    const photoCaptureModal = document.getElementById("photoCaptureModal");
+    const photoCapturePreview = document.getElementById("photoCapturePreview");
+    const photoCanvas = document.getElementById("photoCanvas");
+    const captureBtn = document.getElementById("captureBtn");
+    const photoCaptureCancel = document.getElementById("photoCaptureCancel");
+    const photoCaptureFlashBtn = document.getElementById("photoCaptureFlashBtn");
+
+    // 照片顯示模態視窗元素
+    const photoDisplayModal = document.getElementById("photoDisplayModal");
+    const doodleCanvas = document.getElementById("doodleCanvas");
+    const doodleCtx = doodleCanvas.getContext('2d');
+    const doodleColorInput = document.getElementById("doodleColor");
+    const clearDoodleBtn = document.getElementById("clearDoodleBtn");
+    const closeDoodleBtn = document.getElementById("closeDoodleBtn"); 
+    const modalRemarkTextarea = document.getElementById("modalRemarkTextarea");
+    const clearRemarkBtn = document.getElementById("clearRemarkBtn");
+    const remarkCharCount = document.getElementById("remarkCharCount");
+
+    // ===== 狀態變數 =====
+    let currentScanner = null;
+    let currentPhotoTargetTime = null;
+    let soundEnabled = false;
+    let lastScanTimeMap = {};
+    let photoStream = null;
+    let scannerActive = true;
+    let photoFlashActive = false;
+    let isDrawing = false;
+    let lastX = 0;
+    let lastY = 0;
+    let originalPhotoDataUrl = null;
+
+    // ===== 音效系統 =====
+    let audioContext = null;
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
+                 (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+    // ===== 初始化 =====
+    document.addEventListener('DOMContentLoaded', function() {
+      initAudioSystem();
+      initSound();
+      loadHistory();
+      startMainScanner();
+      
+      // 事件監聽器
+      statusFilter.addEventListener('change', loadHistory);
+      exportBtn.addEventListener('click', exportCSV);
+      soundBtn.addEventListener('click', toggleSound);
+      captureBtn.addEventListener('click', capturePhoto);
+      photoCaptureCancel.addEventListener('click', cancelPhotoCapture);
+      toggleScannerBtn.addEventListener('click', toggleScanner);
+      photoCaptureFlashBtn.addEventListener('click', togglePhotoFlash);
+
+      // 塗鴉事件
+      setupDoodleEvents();
+      
+      // 備註框事件
+      modalRemarkTextarea.addEventListener('input', handleRemarkInput);
+      modalRemarkTextarea.addEventListener('blur', autoResizeRemarkTextarea);
+      clearRemarkBtn.addEventListener('click', clearRemark);
+
+      // 初始化備註框
+      modalRemarkTextarea.placeholder = `輸入備註 (最多 ${REMARK_MAX_LENGTH} 字)`;
+      modalRemarkTextarea.setAttribute('maxlength', REMARK_MAX_LENGTH);
+      updateRemarkCharCount();
+
+      // iOS 提示
+      if (isIOS) {
+        setTimeout(() => {
+          alert("提示：點擊音效開啟beep聲");
+        }, 500);
+      }
+    });
+
+    // ===== 音效系統 =====
+    function initAudioSystem() {
+      try {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        
+        if (isIOS) {
+          // iOS 需要用戶交互後才能初始化
+          const initOnInteraction = () => {
+            document.removeEventListener('touchstart', initOnInteraction);
+            document.removeEventListener('click', initOnInteraction);
+            initIOSAudio();
+          };
+          document.addEventListener('touchstart', initOnInteraction, { once: true });
+          document.addEventListener('click', initOnInteraction, { once: true });
+        } else {
+          // 其他平台直接初始化
+          audioContext = new AudioContext();
+          console.log("音效系統已初始化 (非iOS)");
+        }
+      } catch (e) {
+        console.error("音效初始化失敗:", e);
+      }
+    }
+
+    function initIOSAudio() {
+      try {
+        if (audioContext) return;
+        
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        audioContext = new AudioContext();
+        
+        // iOS 必須播放一個無聲緩衝區來解鎖音效
+        const buffer = audioContext.createBuffer(1, 1, 22050);
+        const source = audioContext.createBufferSource();
+        source.buffer = buffer;
+        source.connect(audioContext.destination);
+        source.start(0);
+        
+        console.log("iOS 音效系統已解鎖");
+      } catch (e) {
+        console.error("iOS音效初始化失敗:", e);
+      }
+    }
+
+    function playBeep() {
+      if (!soundEnabled) return;
+
+      try {
+        if (!audioContext) {
+          playBeepFallback();
+          return;
+        }
+
+        if (audioContext.state === 'suspended') {
+          audioContext.resume().then(() => {
+            playBeepSound();
+          }).catch(playBeepFallback);
+        } else {
+          playBeepSound();
+        }
+      } catch (e) {
+        console.error("播放音效失敗:", e);
+        playBeepFallback();
+      }
+    }
+
+    function playBeepSound() {
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+      
+      oscillator.type = "sine";
+      oscillator.frequency.value = 880;
+      
+      gainNode.gain.setValueAtTime(0, audioContext.currentTime);
+      gainNode.gain.linearRampToValueAtTime(0.3, audioContext.currentTime + 0.01);
+      gainNode.gain.linearRampToValueAtTime(0, audioContext.currentTime + 0.1);
+      
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      
+      oscillator.start();
+      oscillator.stop(audioContext.currentTime + 0.1);
+    }
+
+    function playBeepFallback() {
+      try {
+        const beep = new Audio();
+        beep.src = 'data:audio/wav;base64,UklGRl9vT19XQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YU...';
+        beep.volume = 0.3;
+        beep.play().catch(e => console.log("備用音效播放失敗:", e));
+      } catch (e) {
+        console.error("無法使用備用音效:", e);
+      }
+    }
+
+    // ===== 掃描器功能 =====
+    async function startMainScanner() {
+        stopAllStreams();
+        try {
+            const hints = new Map();
+            hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.QR_CODE]);
+
+            currentScanner = new ZXing.BrowserMultiFormatReader(hints);
+            await currentScanner.decodeFromVideoDevice(
+                undefined,
+                'reader',
+                (result, err) => {
+                    if (result) {
+                        const now = Date.now();
+                        const lastTime = lastScanTimeMap[result.text] || 0;
+                        if (now - lastTime >= 5000) {
+                            lastScanTimeMap[result.text] = now;
+                            addHistory(result.text);
+                        }
+                    }
+                    if (err && !(err instanceof ZXing.NotFoundException)) {
+                        console.error(err);
+                    }
+                }
+            );
+            scannerActive = true;
+            toggleScannerBtn.textContent = "關閉鏡頭";
+            // 顯示掃描引導框
+            scanGuide.style.display = 'flex';
+        } catch (err) {
+            console.error("掃描器初始化失敗:", err);
+            scannerActive = false;
+            toggleScannerBtn.textContent = "開啟鏡頭";
+            // 隱藏掃描引導框
+            scanGuide.style.display = 'none';
+        }
+    }
+
+    function stopMainScanner() {
+      stopAllStreams();
+      if (currentScanner) {
+        currentScanner.reset();
+        currentScanner = null;
+      }
+      scannerActive = false;
+      toggleScannerBtn.textContent = "開啟鏡頭";
+      // 隱藏掃描引導框
+      scanGuide.style.display = 'none';
+    }
+
+    function toggleScanner() {
+      if (scannerActive) {
+        stopMainScanner();
+      } else {
+        startMainScanner();
+      }
+    }
+
+    function stopAllStreams() {
+        if (photoStream) {
+            photoStream.getTracks().forEach(track => track.stop());
+            photoStream = null;
+        }
+        if (currentScanner) {
+            currentScanner.reset();
+            currentScanner = null;
+        }
+    }
+
+    // ===== 記錄管理 =====
+    function addHistory(data) {
+        const list = getHistoryList();
+        const existingRecord = list.find(item => item.data === data);
+        const now = new Date().toISOString();
+        let recordToScrollId = '';
+
+        if (existingRecord) {
+            existingRecord.time = now;
+            existingRecord.status = "restock";
+            recordToScrollId = `record-${existingRecord.time}`;
+        } else {
+            const newRecord = {
+                data: data,
+                time: now,
+                status: "restock",
+                photo: null,
+                originalPhoto: null,
+                remark: ""
+            };
+            list.unshift(newRecord);
+            recordToScrollId = `record-${newRecord.time}`;
+        }
+        saveHistoryList(list);
+        loadHistory();
+        playBeep();
+
+        setTimeout(() => {
+            const element = document.getElementById(recordToScrollId);
+            if (element) {
+                element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        }, 100);
+    }
+
+    async function handleStatusChange(time, status) {
+        const list = getHistoryList();
+        const recordIndex = list.findIndex(item => item.time === time);
+        
+        if (recordIndex !== -1) {
+            if (status === "delete") {
+                const confirmed = await confirmDelete(list[recordIndex].data);
+                if (confirmed) {
+                    list.splice(recordIndex, 1);
+                    saveHistoryList(list);
+                    loadHistory();
+                }
+            } else {
+                list[recordIndex].status = status;
+                saveHistoryList(list);
+                loadHistory();
+            }
+        }
+    }
+
+    function confirmDelete(message) {
+        return new Promise((resolve) => {
+            const modal = document.createElement('div');
+            modal.className = 'delete-confirm-modal';
+            
+            const content = document.createElement('div');
+            content.className = 'delete-confirm-content';
+            content.innerHTML = `
+                <p>確定刪除記錄: ${message}？</p>
+                <div class="delete-confirm-buttons">
+                    <button class="delete-confirm-btn confirm">確定</button>
+                    <button class="delete-confirm-btn cancel">取消</button>
+                </div>
+            `;
+            
+            modal.appendChild(content);
+            document.body.appendChild(modal);
+            
+            const confirmBtn = content.querySelector('.confirm');
+            const cancelBtn = content.querySelector('.cancel');
+            
+            confirmBtn.addEventListener('click', () => {
+                document.body.removeChild(modal);
+                resolve(true);
+            });
+            
+            cancelBtn.addEventListener('click', () => {
+                document.body.removeChild(modal);
+                resolve(false);
+            });
+        });
+    }
+
+    function loadHistory() {
+        const list = getHistoryList();
+        const filter = statusFilter.value;
+        const filtered = filter ? list.filter(item => item.status === filter) : list;
+
+        const stats = {
+            restock: list.filter(item => item.status === "restock").length,
+            empty: list.filter(item => item.status === "empty").length,
+        };
+
+        statusStats.innerHTML = `
+            補貨: ${stats.restock} |
+            空位: ${stats.empty}
+        `;
+
+        resultList.innerHTML = filtered.map(item => {
+            return `
+            <div class="record" id="record-${item.time}" data-time="${item.time}" data-status="${item.status}">
+                <div class="content-and-time">
+                    <strong>${item.data}</strong>
+                    <div class="time">${formatTime(item.time)}</div>
+                </div>
+                <div class="options">
+                    <button onclick="handleStatusChange('${item.time}', 'restock')"
+                        ${item.status === 'restock' ? 'style="background:#ffa500;color:white"' : ''}>
+                        補貨
+                    </button>
+                    <button onclick="handleStatusChange('${item.time}', 'empty')"
+                        ${item.status === 'empty' ? 'style="background:#b7f5b7;color:black"' : ''}>
+                        空位
+                    </button>
+                    <button onclick="startPhotoCapture('${item.time}')">拍照</button>
+                    ${item.photo ? `<button onclick="showPhoto('${item.time}')" style="color:blue;">照片</button>` : ''}
+                    <button onclick="handleStatusChange('${item.time}', 'delete')" style="color:red">刪除</button>
+                </div>
+            </div>
+            `;
+        }).join('');
+    }
+
+    // ===== 拍照功能 =====
+    async function startPhotoCapture(time) {
+        currentPhotoTargetTime = time;
+        stopAllStreams();
+        photoCaptureModal.style.display = 'flex';
+        try {
+            photoStream = await navigator.mediaDevices.getUserMedia({ 
+                video: { 
+                    facingMode: 'environment',
+                    torch: photoFlashActive
+                } 
+            });
+            photoCapturePreview.srcObject = photoStream;
+
+            photoCapturePreview.onloadedmetadata = () => {
+                photoCapturePreview.play().catch(err => console.error("影片播放失敗:", err));
+                captureBtn.disabled = false;
+                photoCaptureFlashBtn.disabled = false;
+            };
+
+        } catch (err) {
+            console.error("無法啟動相機:", err);
+            alert("無法啟動相機，請檢查權限或裝置。\n錯誤訊息: " + err.message);
+            cancelPhotoCapture();
+        }
+    }
+
+    function capturePhoto() {
+        const context = photoCanvas.getContext('2d');
+        photoCanvas.width = photoCapturePreview.videoWidth;
+        photoCanvas.height = photoCapturePreview.videoHeight;
+        context.drawImage(photoCapturePreview, 0, 0, photoCanvas.width, photoCanvas.height);
+
+        const dataUrl = photoCanvas.toDataURL('image/jpeg', 0.8);
+        const list = getHistoryList();
+        const record = list.find(item => item.time === currentPhotoTargetTime);
+
+        if (record) {
+            record.photo = dataUrl;
+            record.originalPhoto = dataUrl;
+            saveHistoryList(list);
+            playBeep();
+        }
+
+        photoCaptureModal.style.display = 'none';
+        stopAllStreams();
+        startMainScanner();
+        showPhoto(currentPhotoTargetTime);
+    }
+
+    function cancelPhotoCapture() {
+        photoCaptureModal.style.display = 'none';
+        currentPhotoTargetTime = null;
+        captureBtn.disabled = true;
+        photoCaptureFlashBtn.disabled = true;
+        if (photoStream) {
+            photoStream.getTracks().forEach(track => track.stop());
+            photoStream = null;
+        }
+        photoCapturePreview.srcObject = null;
+        photoFlashActive = false;
+        photoCaptureFlashBtn.classList.remove('active');
+        photoCaptureFlashBtn.textContent = "🔦 開啟閃光燈";
+        startMainScanner();
+        loadHistory();
+        setTimeout(() => {
+            if (resultList.firstElementChild) {
+                resultList.firstElementChild.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        }, 100);
+    }
+
+    async function togglePhotoFlash() {
+        if (!photoStream) return;
+        
+        try {
+            const videoTrack = photoStream.getVideoTracks()[0];
+            if (!videoTrack) return;
+            
+            if (typeof videoTrack.getCapabilities === 'function') {
+                const capabilities = videoTrack.getCapabilities();
+                if (capabilities.torch) {
+                    photoFlashActive = !photoFlashActive;
+                    await videoTrack.applyConstraints({
+                        advanced: [{torch: photoFlashActive}]
+                    });
+                    
+                    photoCaptureFlashBtn.classList.toggle('active', photoFlashActive);
+                    photoCaptureFlashBtn.textContent = photoFlashActive ? "🔦 關閉閃光燈" : "🔦 開啟閃光燈";
+                    photoCaptureFlashBtn.disabled = false;
+                    return;
+                }
+            }
+            
+            alert("您的設備不支援閃光燈功能");
+            photoCaptureFlashBtn.disabled = true;
+        } catch (err) {
+            console.error("閃光燈切換失敗:", err);
+            alert("閃光燈切換失敗: " + err.message);
+            photoCaptureFlashBtn.disabled = true;
+        }
+    }
+
+    // ===== 照片顯示與塗鴉 =====
+    function showPhoto(time) {
+        const list = getHistoryList();
+        const record = list.find(item => item.time === time);
+        if (record && record.photo) {
+            if (!record.originalPhoto) {
+                record.originalPhoto = record.photo;
+                saveHistoryList(list);
+            }
+            if (record.remark === undefined) {
+                record.remark = "";
+                saveHistoryList(list);
+            }
+
+            originalPhotoDataUrl = record.originalPhoto;
+
+            const img = new Image();
+            img.onload = () => {
+                const maxWidth = window.innerWidth * 0.95;
+                const maxHeight = window.innerHeight * 0.60;
+
+                let width = img.width;
+                let height = img.height;
+
+                if (width > maxWidth) {
+                    height = height * (maxWidth / width);
+                    width = maxWidth;
+                }
+                if (height > maxHeight) {
+                    width = width * (maxHeight / height);
+                    height = maxHeight;
+                }
+
+                doodleCanvas.width = width;
+                doodleCanvas.height = height;
+
+                doodleCtx.clearRect(0, 0, doodleCanvas.width, doodleCanvas.height);
+                doodleCtx.drawImage(img, 0, 0, doodleCanvas.width, doodleCanvas.height);
+            };
+            img.src = record.photo;
+            
+            modalRemarkTextarea.value = record.remark.substring(0, REMARK_MAX_LENGTH);
+            autoResizeRemarkTextarea();
+            updateRemarkCharCount();
+
+            photoDisplayModal.style.display = 'flex';
+            currentPhotoTargetTime = time;
+        } else {
+            alert("找不到照片!");
+        }
+    }
+
+    function setupDoodleEvents() {
+      doodleCanvas.addEventListener('mousedown', startDrawing);
+      doodleCanvas.addEventListener('mousemove', draw);
+      doodleCanvas.addEventListener('mouseup', stopDrawing);
+      doodleCanvas.addEventListener('mouseout', stopDrawing);
+
+      doodleCanvas.addEventListener('touchstart', startDrawing);
+      doodleCanvas.addEventListener('touchmove', draw);
+      doodleCanvas.addEventListener('touchend', stopDrawing);
+      doodleCanvas.addEventListener('touchcancel', stopDrawing);
+
+      clearDoodleBtn.addEventListener('click', clearDoodle); 
+      
+      clearDoodleBtn.addEventListener('touchstart', function(event) {
+          event.preventDefault(); 
+      });
+
+      clearDoodleBtn.addEventListener('touchend', function(event) {
+          event.preventDefault(); 
+          clearDoodle(); 
+      });
+
+      closeDoodleBtn.addEventListener('click', closePhotoDisplay); 
+      
+      closeDoodleBtn.addEventListener('touchstart', function(event) {
+          event.preventDefault(); 
+      });
+
+      closeDoodleBtn.addEventListener('touchend', function(event) {
+          event.preventDefault(); 
+          modalRemarkTextarea.blur(); 
+          closePhotoDisplay(); 
+      });
+    }
+
+    function startDrawing(e) {
+        e.preventDefault();
+        isDrawing = true;
+        const pos = e.type.includes('mouse') ? getMousePos(doodleCanvas, e) : getTouchPos(doodleCanvas, e);
+        [lastX, lastY] = [pos.x, pos.y];
+        doodleCtx.beginPath();
+        doodleCtx.moveTo(lastX, lastY);
+    }
+
+    function draw(e) {
+        if (!isDrawing) return;
+        e.preventDefault();
+        const pos = e.type.includes('mouse') ? getMousePos(doodleCanvas, e) : getTouchPos(doodleCanvas, e);
+
+        doodleCtx.lineWidth = 5;
+        doodleCtx.lineCap = 'round';
+        doodleCtx.strokeStyle = doodleColorInput.value;
+
+        doodleCtx.lineTo(pos.x, pos.y);
+        doodleCtx.stroke();
+        [lastX, lastY] = [pos.x, pos.y];
+    }
+
+    function stopDrawing() {
+        isDrawing = false;
+        doodleCtx.closePath();
+    }
+
+    function clearDoodle() {
+        if (originalPhotoDataUrl) {
+            const img = new Image();
+            img.onload = () => {
+                doodleCtx.clearRect(0, 0, doodleCanvas.width, doodleCanvas.height);
+                doodleCtx.drawImage(img, 0, 0, doodleCanvas.width, doodleCanvas.height);
+            };
+            img.src = originalPhotoDataUrl;
+        } else {
+            doodleCtx.clearRect(0, 0, doodleCanvas.width, doodleCanvas.height);
+        }
+    }
+
+    function closePhotoDisplay() {
+        if (currentPhotoTargetTime) { 
+            const dataUrl = doodleCanvas.toDataURL('image/jpeg', 0.8);
+            const list = getHistoryList();
+            const record = list.find(item => item.time === currentPhotoTargetTime);
+
+            if (record) {
+                record.photo = dataUrl;
+                saveHistoryList(list);
+            }
+
+            saveRemark(currentPhotoTargetTime, modalRemarkTextarea.value);
+        }
+
+        photoDisplayModal.style.display = 'none';
+        doodleCtx.clearRect(0, 0, doodleCanvas.width, doodleCanvas.height);
+        originalPhotoDataUrl = null;
+        currentPhotoTargetTime = null;
+        modalRemarkTextarea.value = '';
+        modalRemarkTextarea.style.height = REMARK_MIN_HEIGHT;
+        updateRemarkCharCount();
+
+        loadHistory();
+        setTimeout(() => {
+            if (resultList.firstElementChild) {
+                resultList.firstElementChild.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        }, 100);
+    }
+
+    function getMousePos(canvas, evt) {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        return {
+            x: (evt.clientX - rect.left) * scaleX,
+            y: (evt.clientY - rect.top) * scaleY
+        };
+    }
+
+    function getTouchPos(canvas, evt) {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const touch = evt.touches[0];
+        return {
+            x: (touch.clientX - rect.left) * scaleX,
+            y: (touch.clientY - rect.top) * scaleY
+        };
+    }
+
+    // ===== 備註功能 =====
+    function handleRemarkInput() {
+        if (modalRemarkTextarea.value.length > REMARK_MAX_LENGTH) {
+            modalRemarkTextarea.value = modalRemarkTextarea.value.substring(0, REMARK_MAX_LENGTH);
+        }
+        autoResizeRemarkTextarea();
+        updateRemarkCharCount();
+    }
+
+    function autoResizeRemarkTextarea() {
+        modalRemarkTextarea.style.height = 'auto'; 
+        modalRemarkTextarea.style.overflowY = 'hidden';
+
+        window.requestAnimationFrame(() => {
+            let newHeight = modalRemarkTextarea.scrollHeight;
+            
+            if (newHeight < parseFloat(REMARK_MIN_HEIGHT)) {
+                newHeight = parseFloat(REMARK_MIN_HEIGHT);
+            }
+
+            modalRemarkTextarea.style.height = newHeight + 'px';
+        });
+    }
+
+    function updateRemarkCharCount() {
+        const currentLength = modalRemarkTextarea.value.length;
+        remarkCharCount.textContent = `${currentLength}/${REMARK_MAX_LENGTH} 字`;
+        remarkCharCount.style.color = currentLength > REMARK_MAX_LENGTH ? '#ff5722' : '#aaa';
+    }
+
+    function clearRemark() {
+        modalRemarkTextarea.value = '';
+        autoResizeRemarkTextarea();
+        updateRemarkCharCount();
+        if (currentPhotoTargetTime) {
+            saveRemark(currentPhotoTargetTime, '');
+        }
+    }
+
+    function saveRemark(time, newRemarkValue) {
+        const list = getHistoryList();
+        const record = list.find(item => item.time === time);
+        if (record) {
+            record.remark = newRemarkValue.substring(0, REMARK_MAX_LENGTH);
+            saveHistoryList(list);
+        }
+    }
+
+    // ===== 工具函數 =====
+    function initSound() {
+      soundEnabled = localStorage.getItem(SOUND_KEY) === "true";
+      updateSoundButton();
+    }
+
+    function toggleSound() {
+      soundEnabled = !soundEnabled;
+      localStorage.setItem(SOUND_KEY, soundEnabled);
+      updateSoundButton();
+      if (soundEnabled) playBeep();
+    }
+
+    function updateSoundButton() {
+      soundBtn.textContent = soundEnabled ? "🔊 音效開啟" : "🔇 音效關閉";
+      soundBtn.style.backgroundColor = soundEnabled ? "#d4edda" : "#f8d7da";
+    }
+
+    function exportCSV() {
+        const list = getHistoryList();
+        if (list.length === 0) return alert("沒有可導出的數據");
+
+        const headers = ["內容", "時間", "狀態", "是否有照片", "備註"];
+
+        const rows = list.map(item => [
+            `"${item.data.replace(/"/g, '""')}"`,
+            `"${formatTime(item.time)}"`,
+            `"${getStatusText(item.status)}"`,
+            `"${item.photo ? 'Y' : 'N'}"`,
+            `"${(item.remark || "").replace(/"/g, '""')}"`
+        ]);
+
+        const csvContent = [
+            headers.join(","),
+            ...rows.map(row => row.join(","))
+        ].join("\r\n");
+
+        const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `層架記錄_${new Date().toISOString().slice(0, 10)}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    function getHistoryList() {
+        const data = localStorage.getItem(STORAGE_KEY);
+        return data ? JSON.parse(data) : [];
+    }
+
+    function saveHistoryList(list) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+    }
+
+    function formatTime(isoString) {
+        const date = new Date(isoString);
+        const year = date.getFullYear();
+        const month = (date.getMonth() + 1).toString().padStart(2, '0');
+        const day = date.getDate().toString().padStart(2, '0');
+        const hours = date.getHours().toString().padStart(2, '0');
+        const minutes = date.getMinutes().toString().padStart(2, '0');
+        return `${year}/${month}/${day} ${hours}:${minutes}`;
+    }
+
+    function getStatusText(status) {
+        const map = {
+            restock: "補貨",
+            empty: "空位"
+        };
+        return map[status] || "";
+    }
+
+    // ===== 全局函數 =====
+    window.handleStatusChange = handleStatusChange;
+    window.startPhotoCapture = startPhotoCapture;
+    window.showPhoto = showPhoto;
+  </script>
+</body>
+</html>
