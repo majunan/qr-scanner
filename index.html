@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>層架狀態記錄（真站/樹林）</title>
+  <script src="https://unpkg.com/@zxing/library@0.19.1"></script>
+  <script src="https://apis.google.com/js/api.js"></script>
+  <style>
+    /* ...（原本你的 CSS 可保留）... */
+  </style>
+</head>
+<body>
+  <h1>📋 層架狀態記錄</h1>
+  <button id="googleLoginBtn">Google 登入</button>
+  <button id="soundBtn">🔇 音效關閉</button>
+  <button id="exportBtn">📤 匯出資料</button>
+  <!-- ...（原本你的 HTML 元素可保留）... -->
+
+  <!-- ...你的掃描器/記錄/拍照等結構不變... -->
+
+  <script>
+    // ===== Google Sheets API 設定 =====
+    const CLIENT_ID = '558874309133-2ov80lnnm24h711hppoi51t7rpf36jiu.apps.googleusercontent.com';
+    const API_KEY = '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';
+    const SPREADSHEET_ID = '1SpLED6p_23s0B7RgNvxTmJJL7d1LuNVhrQXXY7MYFI0';
+    const DISCOVERY_DOCS = ["https://sheets.googleapis.com/$discovery/rest?version=v4"];
+    const SCOPES = "https://www.googleapis.com/auth/spreadsheets";
+
+    // ===== Google API 初始化 =====
+    let isGoogleAuthed = false;
+    document.getElementById('googleLoginBtn').addEventListener('click', handleGoogleLogin);
+
+    function initGoogleClient() {
+      gapi.client.init({
+        apiKey: API_KEY,
+        clientId: CLIENT_ID,
+        discoveryDocs: DISCOVERY_DOCS,
+        scope: SCOPES
+      }).then(() => {
+        // 可選：顯示登入狀態
+        isGoogleAuthed = gapi.auth2.getAuthInstance().isSignedIn.get();
+        updateGoogleLoginBtn();
+        gapi.auth2.getAuthInstance().isSignedIn.listen(function(status){
+          isGoogleAuthed = status;
+          updateGoogleLoginBtn();
+        });
+      });
+    }
+    document.addEventListener('DOMContentLoaded', function() {
+      gapi.load('client:auth2', initGoogleClient);
+    });
+
+    function handleGoogleLogin() {
+      gapi.auth2.getAuthInstance().signIn().then(() => {
+        isGoogleAuthed = true;
+        updateGoogleLoginBtn();
+        alert('Google 登入成功！');
+      });
+    }
+    function updateGoogleLoginBtn() {
+      document.getElementById('googleLoginBtn').textContent = isGoogleAuthed ? '已登入' : 'Google 登入';
+      document.getElementById('googleLoginBtn').disabled = isGoogleAuthed;
+    }
+
+    // ===== 寫入掃描紀錄到 Google Sheets =====
+    function appendToSheet(data, time, status, remark) {
+      if (!isGoogleAuthed) {
+        alert("請先 Google 登入再寫入 Google Sheets！");
+        return;
+      }
+      gapi.client.sheets.spreadsheets.values.append({
+        spreadsheetId: SPREADSHEET_ID,
+        range: "工作表1!A1", // 請依你的工作表名稱調整
+        valueInputOption: "RAW",
+        insertDataOption: "INSERT_ROWS",
+        resource: { values: [[data, time, status, remark]] }
+      }).then(response => {
+        console.log('寫入 Google Sheets 成功:', response);
+      }, error => {
+        alert('寫入 Google Sheets 失敗: ' + error.result.error.message);
+      });
+    }
+
+    // ===== 改寫 addHistory 讓掃描紀錄也寫入 Sheet =====
+    function addHistory(data) {
+      const now = new Date().toISOString();
+      appendToSheet(data, formatTime(now), "補貨", "");
+      playBeep(); // 如果你有音效
+    }
+
+    // ===== 其他 JS 功能（原本你的掃描、拍照等 JS 可繼續使用） =====
+    // ...（原本你的 JS 可保留）...
+
+    // ===== formatTime 工具函數（你的原本程式已有） =====
+    function formatTime(isoString) {
+      const date = new Date(isoString);
+      const year = date.getFullYear();
+      const month = (date.getMonth() + 1).toString().padStart(2, '0');
+      const day = date.getDate().toString().padStart(2, '0');
+      const hours = date.getHours().toString().padStart(2, '0');
+      const minutes = date.getMinutes().toString().padStart(2, '0');
+      return `${year}/${month}/${day} ${hours}:${minutes}`;
+    }
+  </script>
+</body>
+</html>
